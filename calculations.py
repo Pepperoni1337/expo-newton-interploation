@@ -1,10 +1,17 @@
 # calculations.py
 # Modul pro matematické výpočty interpolačních metod.
+# VERZE S VYSOKOU PŘESNOSTÍ pro B-interpolaci pomocí modulu 'decimal'.
 
 import numpy as np
 import math
+from decimal import Decimal, getcontext
 
-# --- Funkce pro Newtonovu interpolaci ---
+# --- Globální nastavení přesnosti pro modul 'decimal' ---
+# Nastavíme pracovní přesnost na 50 desetinných míst.
+getcontext().prec = 50
+
+
+# --- Funkce pro Newtonovu interpolaci (zůstává beze změny, používá rychlé floaty) ---
 
 def calculate_newton_coeffs(x_nodes: np.ndarray, y_nodes: np.ndarray) -> np.ndarray:
     """Vypočítá koeficienty c_i pro Newtonův interpolační polynom."""
@@ -23,37 +30,72 @@ def evaluate_newton_poly(coeffs: np.ndarray, x_nodes: np.ndarray, x: np.ndarray)
         y = coeffs[i] + (x - x_nodes[i]) * y
     return y
 
-# --- Funkce pro B-interpolaci ---
+
+# --- Funkce pro B-interpolaci (přepsané pro vysokou přesnost) ---
 
 def calculate_B_basis_func(k: int, x: np.ndarray) -> np.ndarray:
     """
-    Vypočítá hodnotu k-té bázové funkce B_k(x).
-    B_k(x) = (1/k!) * Σ [(-1)^(k-j) * C(k,j) * (j+1)^x]
+    Vypočítá hodnotu k-té bázové funkce B_k(x) s vysokou přesností.
     """
-    if k < 0: return np.zeros_like(x)
-    total_sum = np.zeros_like(x, dtype=float)
-    for j in range(k + 1):
-        comb = math.comb(k, j)
-        term = ((-1)**(k - j)) * comb * np.power(j + 1, x, dtype=float)
-        total_sum += term
-    return total_sum / float(math.factorial(k))
+    if k < 0:
+        return np.zeros_like(x, dtype=float)
+
+    x_list = x.tolist()
+    results = []
+
+    factorial_k = Decimal(math.factorial(k))
+    one = Decimal(1)
+
+    for x_val in x_list:
+        x_dec = Decimal(x_val)
+        total_sum = Decimal(0)
+
+        for j in range(k + 1):
+            comb = Decimal(math.comb(k, j))
+            sign = one if (k - j) % 2 == 0 else -one
+            base = Decimal(j + 1)
+
+            # --- ZDE JE KLÍČOVÁ OPRAVA ---
+            # Metoda .power() funguje jen pro celočíselné exponenty.
+            # Pro reálné exponenty použijeme identitu a^x = exp(x * ln(a)).
+            # Knihovna 'decimal' má vysoce přesné verze .ln() a .exp().
+            power_result = (x_dec * base.ln()).exp()
+            term = sign * comb * power_result
+            total_sum += term
+
+        results.append(float(total_sum / factorial_k))
+
+    return np.array(results)
 
 def calculate_d_coeffs(y_nodes: np.ndarray) -> np.ndarray:
-    """Vypočítá koeficienty d_k pro F(x) = Σ d_k * B_k(x)."""
+    """Vypočítá koeficienty d_k s vysokou přesností."""
     n = len(y_nodes) - 1
-    d_coeffs = np.zeros(n + 1)
+    d_coeffs = [Decimal(0)] * (n + 1)
+    y_nodes_dec = [Decimal(y) for y in y_nodes]
+
     for i in range(n + 1):
-        # Vypočítá sumu d_k * B_k(i) pro k < i
-        sum_part = sum(d_coeffs[k] * calculate_B_basis_func(k, np.array([i]))[0] for k in range(i))
-        # d_i = y_i - Σ_{k=0}^{i-1} d_k * B_k(i)
-        d_coeffs[i] = y_nodes[i] - sum_part
-    return d_coeffs
+        sum_part = Decimal(0)
+        i_dec_array = np.array([float(i)])
+
+        for k in range(i):
+            basis_val_array = calculate_B_basis_func(k, i_dec_array)
+            basis_val = Decimal(basis_val_array[0])
+            sum_part += d_coeffs[k] * basis_val
+
+        d_coeffs[i] = y_nodes_dec[i] - sum_part
+
+    return np.array([float(d) for d in d_coeffs])
 
 def evaluate_B_interpolation(d_coeffs: np.ndarray, x: np.ndarray) -> np.ndarray:
-    """Vyhodnotí finální interpolační funkci F(x) = Σ d_k * B_k(x)."""
+    """Vyhodnotí finální interpolační funkci F(x) = Σ d_k * B_k(x) s vysokou přesností."""
     n = len(d_coeffs) - 1
     total_y = np.zeros_like(x, dtype=float)
+
     for k in range(n + 1):
-        if not np.isclose(d_coeffs[k], 0):
-            total_y += d_coeffs[k] * calculate_B_basis_func(k, x)
+        if np.isclose(d_coeffs[k], 0):
+            continue
+
+        basis_values = calculate_B_basis_func(k, x)
+        total_y += d_coeffs[k] * basis_values
+
     return total_y
